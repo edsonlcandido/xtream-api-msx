@@ -48,6 +48,11 @@ Xtream__PublicScheme=https
 # Xtream__Password=
 ```
 
+O exemplo pressupõe que um proxy reverso termina o TLS do domínio público e encaminha as
+requisições ao container em HTTP na porta `8080`. Ajuste `BASE_URL` ao esquema usado pelo
+painel de origem e `Xtream__PublicBaseUrl` / `Xtream__PublicScheme` ao endereço público do
+MSX.
+
 Construa e execute:
 
 ```bash
@@ -93,7 +98,8 @@ As variáveis podem ser informadas no arquivo de ambiente ou como opções do AS
 | `Xtream__Username` / `Xtream__Password` | Credenciais padrão/fallback para uma conta. |
 | `Xtream__PublicBaseUrl` | URL pública do Xtream MSX, útil atrás de proxy reverso. |
 | `Xtream__PublicScheme` | Esquema usado nas URLs geradas. O padrão atual é `http`. |
-| `Xtream__PlaybackBaseUrl` | Base fixa para URLs de reprodução; quando vazia, usa `server_info` do painel se disponível. |
+| `Xtream__UseServerInfo` | Usa `server_info` do painel para montar URLs de reprodução (padrão: `true`). |
+| `Xtream__PlaybackBaseUrl` | Base fixa para URLs de reprodução; quando definida, tem prioridade sobre `server_info`. |
 | `Xtream__DefaultLiveCategory` | Categoria inicial de canais ao vivo. |
 | `Xtream__DefaultVodCategory` | Categoria inicial de filmes. |
 | `Xtream__DefaultSeriesCategory` | Categoria inicial de séries. |
@@ -113,7 +119,7 @@ Os IDs de categoria em `appsettings.json` são valores de exemplo: ajuste-os aos
 
 ## Transporte e segurança
 
-- O esquema público padrão é `http`, para manter compatibilidade com painéis que só oferecem reprodução HTTP. Configure `Xtream__PublicScheme` conforme o domínio público e os clientes usados. Uma página MSX em HTTPS com streams HTTP pode sofrer bloqueio de *mixed content*; o Xtream MSX não retransmite vídeo para contornar isso.
+- As URLs públicas geradas pelo app usam `http` por padrão. Se o endpoint público do MSX usar HTTPS, configure `Xtream__PublicScheme=https`. Streams HTTP carregados por uma página HTTPS podem sofrer bloqueio de *mixed content*; o Xtream MSX não retransmite vídeo para contornar isso.
 - Credenciais no subdomínio podem aparecer em consultas DNS e logs de acesso do proxy. Proteja esses logs, não publique URLs de clientes e use HTTPS quando toda a cadeia de reprodução for compatível.
 - Armazene variáveis de ambiente e arquivos de secrets fora do repositório e limite o acesso ao painel e ao servidor.
 
