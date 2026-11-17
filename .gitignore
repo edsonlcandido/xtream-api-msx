@@ -75,6 +75,9 @@ _ReSharper*/
 .env.*.local
 *.env
 
+# Historico de "ultimos assistidos" (dados do usuario, fora do repo)
+data/
+
 # Credenciais do Xtream Codes (nunca versionar)
 appsettings.Local.json
 appsettings.*.Local.json

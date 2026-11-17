@@ -2,11 +2,11 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ehiptv_msx.Models;
+using xtream_api_msx.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>
 /// Cliente do Xtream Codes (player_api.php). Fala direto com o provedor,
@@ -223,6 +223,94 @@ public sealed class XtreamClient
         }
 
         return builder.ToString().ToLowerInvariant().Trim();
+    }
+
+    /// <summary>
+    /// Metadados de um item assistido (titulo, capa, ano, nota, extensao),
+    /// resolvidos na lista da categoria — que ja fica em cache, entao nao ha
+    /// trafego novo.
+    ///
+    /// Devolve null quando o provedor nao responde ou quando o id nao esta
+    /// na categoria informada: o historico e gravado assim mesmo, e a faixa
+    /// mostra o item sem capa/titulo.
+    /// </summary>
+    public async Task<WatchEntry?> ResolveWatchMetadataAsync(
+        XtreamCredential credential,
+        string kind,
+        string id,
+        string? categoryId)
+    {
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(categoryId))
+        {
+            return null;
+        }
+
+        if (kind == WatchKind.Live)
+        {
+            var stream = (await GetLiveAsync(credential, categoryId!))
+                .FirstOrDefault(item => item.StreamId == id);
+
+            if (stream is null)
+            {
+                return null;
+            }
+
+            return new WatchEntry
+            {
+                Kind = kind,
+                Id = id,
+                CategoryId = categoryId,
+                Title = stream.Name,
+                Cover = stream.StreamIcon
+            };
+        }
+
+        if (kind == WatchKind.Series)
+        {
+            var series = (await GetSeriesAsync(credential, categoryId!))
+                .FirstOrDefault(item => item.SeriesId == id);
+
+            if (series is null)
+            {
+                return null;
+            }
+
+            return new WatchEntry
+            {
+                Kind = kind,
+                Id = id,
+                CategoryId = categoryId,
+                Title = string.IsNullOrWhiteSpace(series.Title) ? series.Name : series.Title!,
+                Cover = series.Cover,
+                Year = series.Year,
+                Rating = series.Rating
+            };
+        }
+
+        if (kind != WatchKind.Movie)
+        {
+            return null;
+        }
+
+        var movie = (await GetVodAsync(credential, categoryId!))
+            .FirstOrDefault(item => item.StreamId == id);
+
+        if (movie is null)
+        {
+            return null;
+        }
+
+        return new WatchEntry
+        {
+            Kind = kind,
+            Id = id,
+            CategoryId = categoryId,
+            Title = string.IsNullOrWhiteSpace(movie.Title) ? movie.Name : movie.Title!,
+            Cover = movie.StreamIcon,
+            Year = movie.Year,
+            Rating = movie.Rating,
+            Extension = movie.ContainerExtension
+        };
     }
 
     /// <summary>

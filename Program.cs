@@ -1,8 +1,8 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using ehiptv_msx.Models;
-using ehiptv_msx.Services;
+using xtream_api_msx.Models;
+using xtream_api_msx.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,15 +18,29 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient("xtream", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(90);
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; ehiptv-msx/1.0)");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; xtream-api-msx/1.0)");
 });
 
 builder.Services.Configure<XtreamOptions>(builder.Configuration.GetSection("Xtream"));
+builder.Services.Configure<HistoryOptions>(builder.Configuration.GetSection("History"));
+
+// O historico de "ultimos assistidos" fica FORA do repositorio: o caminho
+// vem da variavel de ambiente "HISTORY_PATH" (em producao, um volume do
+// Easypanel montado em /data).
+builder.Services.PostConfigure<HistoryOptions>(options =>
+{
+    var envPath = Environment.GetEnvironmentVariable("HISTORY_PATH");
+
+    if (!string.IsNullOrWhiteSpace(envPath))
+    {
+        options.Path = envPath.Trim();
+    }
+});
 
 // As bases do provedor e as credenciais ficam FORA do repositorio:
 //   - variaveis de ambiente (Docker/Easypanel): BASE_URL, FALLBACK_URL,
 //     PROXY_URL (e o padrao Xtream__Username / Xtream__Password);
-//   - arquivo local de secrets: %USERPROFILE%\.minimax\secrets\ehiptv-msx.json
+//   - arquivo local de secrets: %USERPROFILE%\.minimax\secrets\xtream-api-msx.json
 builder.Services.PostConfigure<XtreamOptions>(options =>
 {
     var envBase = Environment.GetEnvironmentVariable("BASE_URL");
@@ -78,6 +92,7 @@ builder.Services.AddSingleton<CredentialResolver>();
 builder.Services.AddSingleton<XtreamClient>();
 builder.Services.AddSingleton<XtreamApiService>();
 builder.Services.AddSingleton<EpgService>();
+builder.Services.AddSingleton<WatchHistoryStore>();
 builder.Services.AddSingleton<MsxContentFactory>();
 
 // CORS: o MSX busca o start.json/menu.json com withCredentials=true.
@@ -195,12 +210,34 @@ app.MapGet("/msx/menu.json", async (HttpContext context, CredentialResolver reso
 app.MapGet("/msx/ajuda.json", (HttpContext context) =>
     Results.Json(BuildHelpContent(context), MsxJson.Options));
 
-// Tela 1 - Inicio (os 3 itens: TV, Filmes, Series).
-app.MapGet("/msx/content/home.json", (HttpContext context, CredentialResolver resolver,
+// Tela 1 - Inicio (os 3 items: TV, Filmes, Series + a secao de "ultimos
+// assistidos", que so existe quando ha historico).
+//
+// O "reference" aponta para a mesma tela em /home-data.json. E o que permite
+// recarregar a tela doInicio em tempo de execucao: o MSX so recarrega conteudo
+// carregado no startup se ele vier por "reference". O conteudo tambem vem
+// embutido aqui (para versoes antigas do MSX, que ignoram o "reference").
+app.MapGet("/msx/content/home.json", async (HttpContext context, CredentialResolver resolver,
     MsxContentFactory factory) =>
 {
     var credential = resolver.Resolve(context);
-    return Results.Json(factory.BuildHome(context, credential), MsxJson.Options);
+    var content = await factory.BuildHomeAsync(context, credential);
+
+    content.Reference = $"{factory.PublicBaseUrl(context)}/msx/content/home-data.json";
+
+    return Results.Json(content, MsxJson.Options);
+});
+
+// Tela doInicio — conteudo real (o "reference" do /home.json aponta aqui).
+app.MapGet("/msx/content/home-data.json", async (HttpContext context, CredentialResolver resolver,
+    MsxContentFactory factory) =>
+{
+    var credential = resolver.Resolve(context);
+    var content = await factory.BuildHomeAsync(context, credential);
+
+    content.Reference = null;
+
+    return Results.Json(content, MsxJson.Options);
 });
 
 // Canais: menu com as categorias de TV (coluna nativa do app, que rola e
@@ -459,6 +496,154 @@ app.MapGet("/msx/content/series-seasons/{seriesId}.json", async (HttpContext con
     var content = await factory.BuildSeriesSeasonsAsync(
         context, credential, seriesId, context.Request.Query["category_id"].FirstOrDefault());
     return Results.Json(content, MsxJson.Options);
+});
+
+// ---------------------------------------------------------------------------
+// Historico de "ultimos assistidos"
+// ---------------------------------------------------------------------------
+
+// Gravacao: o MSX chama este servico quando a reproducao comeca
+// ("trigger:start" -> "execute:service:{URL}"). O "kind" diz o que foi
+// tocado (movie/series/live), o "id" e o stream_id (ou o series_id) e o
+// "category_id" e a categoria de origem.
+//
+// A resposta nao traz "data": o MSX nao tem o que atualizar na tela.
+app.MapMethods("/msx/history/record", ["GET", "POST"], async (HttpContext context,
+    CredentialResolver resolver, XtreamClient xtream, WatchHistoryStore history) =>
+{
+    var credential = resolver.Resolve(context);
+
+    if (!credential.HasCredentials)
+    {
+        return Results.Json(new MsxServiceResponse
+        {
+            Response = new MsxResponseEnvelope
+            {
+                Status = 401,
+                Text = "Unauthorized",
+                Message = "Informe usuario e senha."
+            }
+        }, MsxJson.Options);
+    }
+
+    var kind = (await ReadParameterAsync(context, "kind"))?.Trim().ToLowerInvariant() ?? string.Empty;
+    var id = (await ReadParameterAsync(context, "id"))?.Trim() ?? string.Empty;
+    var categoryId = (await ReadParameterAsync(context, "category_id"))?.Trim();
+
+    if (!WatchKind.IsValid(kind) || string.IsNullOrWhiteSpace(id))
+    {
+        return Results.Json(new MsxServiceResponse
+        {
+            Response = new MsxResponseEnvelope
+            {
+                Status = 400,
+                Text = "Bad Request",
+                Message = "Informe kind (movie|series|live) e id."
+            }
+        }, MsxJson.Options);
+    }
+
+    var entry = new WatchEntry
+    {
+        Kind = kind,
+        Id = id,
+        CategoryId = string.IsNullOrWhiteSpace(categoryId) ? null : categoryId,
+        WatchedAt = DateTimeOffset.UtcNow
+    };
+
+    // Metadados best-effort: se o provedor estiver fora, o registro e
+    // gravado assim mesmo (a faixa mostra o item sem capa/titulo).
+    var metadata = await xtream.ResolveWatchMetadataAsync(credential, kind, id, entry.CategoryId);
+
+    if (metadata is not null)
+    {
+        entry.Title = metadata.Title;
+        entry.Cover = metadata.Cover;
+        entry.Year = metadata.Year;
+        entry.Rating = metadata.Rating;
+        entry.Extension = metadata.Extension;
+    }
+
+    await history.RecordAsync(credential.Username, entry);
+
+    // Resposta de "server action": o MSX EXIGE response.data.action. Como
+    // aqui nao ha nada para atualizar na tela, a acao e o multi-action vazio
+    // ("[]") — o no-op oficial. Sem isso o MSX mostra "Execution error:
+    // Response data is missing." na TV.
+    return Results.Json(new MsxServiceResponse
+    {
+        Response = new MsxResponseEnvelope
+        {
+            Status = 200,
+            Text = "OK",
+            Data = new { action = "[]" }
+        }
+    }, MsxJson.Options);
+});
+
+// Consulta do "ready" da tela doInicio: o MSX pergunta, toda vez que a tela
+// e exibida, se o historico mudou. Se mudou, a resposta recria a tela
+// (reload:content); se nao, e um no-op ("[]") — assim o app nao recarrega a
+// tela em laco.
+app.MapMethods("/msx/history/refresh", ["GET", "POST"], async (HttpContext context,
+    CredentialResolver resolver, WatchHistoryStore history) =>
+{
+    var credential = resolver.Resolve(context);
+
+    if (!credential.HasCredentials)
+    {
+        return Results.Json(new MsxServiceResponse
+        {
+            Response = new MsxResponseEnvelope
+            {
+                Status = 401,
+                Text = "Unauthorized",
+                Message = "Informe usuario e senha.",
+                Data = new { action = "[]" }
+            }
+        }, MsxJson.Options);
+    }
+
+    var version = await history.VersionAsync(credential.Username);
+    var stale = history.IsStale(credential.Username, version);
+
+    if (stale)
+    {
+        history.SetVersion(credential.Username, version);
+    }
+
+    // "reload:content" recria a tela doInicio com a faixa de "ultimos
+    // assistidos" atualizada. O MSX so aceita em tela carregada por URL (a
+    // doInicio e), por isso o "reference" no home.json.
+    var action = stale ? "reload:content" : "[]";
+
+    return Results.Json(new MsxServiceResponse
+    {
+        Response = new MsxResponseEnvelope
+        {
+            Status = 200,
+            Text = "OK",
+            Data = new { action }
+        }
+    }, MsxJson.Options);
+});
+
+// Inspecao do historico (JSON simples, para depuracao).
+app.MapGet("/msx/history", async (HttpContext context, CredentialResolver resolver,
+    WatchHistoryStore history) =>
+{
+    var credential = resolver.Resolve(context);
+
+    if (!credential.HasCredentials)
+    {
+        return Results.Json(
+            new { error = "Informe usuario e senha." },
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    var items = await history.RecentAsync(credential.Username, 500);
+
+    return Results.Json(new { user = credential.Username, items }, MsxJson.Options);
 });
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
-using ehiptv_msx.Models;
+using xtream_api_msx.Models;
 using Microsoft.Extensions.Options;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>
 /// Monta as telas do app MSX (4 telas + paginas de detalhe) a partir do
@@ -17,11 +17,19 @@ public sealed class MsxContentFactory
 {
     private readonly XtreamClient _xtream;
     private readonly XtreamOptions _options;
+    private readonly WatchHistoryStore _history;
+    private readonly HistoryOptions _historyOptions;
 
-    public MsxContentFactory(XtreamClient xtream, IOptions<XtreamOptions> options)
+    public MsxContentFactory(
+        XtreamClient xtream,
+        IOptions<XtreamOptions> options,
+        WatchHistoryStore history,
+        IOptions<HistoryOptions> historyOptions)
     {
         _xtream = xtream;
         _options = options.Value;
+        _history = history;
+        _historyOptions = historyOptions.Value;
     }
 
     // ------------------------------------------------------------------
@@ -121,46 +129,237 @@ public sealed class MsxContentFactory
     // Tela 1 - Inicio
     // ------------------------------------------------------------------
 
-    public MsxContent BuildHome(HttpContext context, XtreamCredential credential) => new()
+    /// <summary>
+    /// Tela 1 - Inicio: duas secoes empilhadas na vertical.
+    ///
+    /// No MSX, o tipo "list" empilha as paginas de conteudo na vertical (e a
+    /// area de conteudo rola), entao a tela rola para baixo da secao dos
+    /// cards para a secao de "ultimos assistidos".
+    ///
+    ///   secao 1: os 3 cards (Canais / Filmes / Series), como antes;
+    ///   secao 2: "Ultimos assistidos" (so existe se houver historico).
+    ///
+    /// O "cache: false" desliga o cache do MSX nesta tela: sem isso a secao de
+    /// ultimos assistidos so apareceria depois de reiniciar o app.
+    /// </summary>
+    public async Task<MsxContent> BuildHomeAsync(HttpContext context, XtreamCredential credential)
     {
-        Type = "pages",
-        Headline = "Eh! IPTV",
-        // No MSX, "items" na raiz do Content Root so funciona com "template".
-        // O template define o tamanho (4x4) e o auto-flow encaixa os 3 cards
-        // lado a lado (3 x 4 = 12 colunas).
-        Template = new MsxTemplate
+        // Consulta de "o historico mudou?": o MSX chama esse servico quando a
+        // tela doInicio e exibida e, se a resposta for "reload:content", a
+        // tela e recriada com a faixa de "ultimos assistidos" atualizada.
+        var refreshUrl = $"execute:service:{BaseUrl(context)}/msx/history/refresh";
+
+        var cards = new List<MsxContentItem>
         {
-            Type = "default",
-            Layout = "0,1,4,4",
-            Color = "msx-glass"
-        },
-        Items =
-        [
             // "Canais", "Filmes" e "Series" abrem o MENU do app (coluna
             // nativa): as categorias ficam na coluna da esquerda, que rola e
             // mostra todas, e o conteudo abre em tela cheia.
+            //
+            // O primeiro card tambem carrega o "live" que faz a consulta de
+            // atualizacao: assim o polling funciona mesmo em versoes do MSX
+            // que ainda nao conhecem o objeto "ready".
             HomeCard("msx-white-soft:live-tv", "Canais ao vivo",
-                SectionMenuUrl(context, "live.json"), "menu"),
+                SectionMenuUrl(context, "live.json"), "menu", "0,1,4,4", refreshUrl),
             HomeCard("msx-white-soft:movie", "Filmes",
-                SectionMenuUrl(context, "vod.json"), "menu"),
+                SectionMenuUrl(context, "vod.json"), "menu", "4,1,4,4"),
             HomeCard("msx-white-soft:video-library", "Séries",
-                SectionMenuUrl(context, "series.json"), "menu")
-        ]
-    };
+                SectionMenuUrl(context, "series.json"), "menu", "8,1,4,4")
+        };
+
+        var pages = new List<MsxContentPage> { new() { Items = cards } };
+
+        var recent = await _history.RecentAsync(credential.Username, _historyOptions.StripItems);
+
+        // O MSX mantem a tela doInicio montada quando o usuario volta do
+        // player (ele nao pede o JSON de novo). O "ready" abaixo e o que
+        // resolve: ao exibir a tela, o MSX pergunta ao app se o historico
+        // mudou e, se mudou, recria a tela com a faixa atualizada.
+        var version = await _history.VersionAsync(credential.Username);
+        _history.SetVersion(credential.Username, version);
+
+        if (recent.Count > 0)
+        {
+            await EnrichAsync(credential, recent);
+
+            var playbackBase = await _xtream.ResolvePlaybackBaseAsync(credential);
+
+            var items = new List<MsxContentItem>
+            {
+                new MsxContentItem
+                {
+                    Id = "last_watched",
+                    Type = "teaser",
+                    Title = "Últimos assistidos",
+                    Layout = "0,0,12,1",
+                    Color = "msx-glass",
+                    Action = $"content:{ContentUrl(context, credential, "home.json")}"
+                }
+            };
+
+            for (var index = 0; index < recent.Count; index++)
+            {
+                items.Add(HistoryItem(context, credential, playbackBase, recent[index], index));
+            }
+
+            pages.Add(new MsxContentPage { Items = items });
+        }
+
+        return new MsxContent
+        {
+            Type = "list",
+            Headline = "Eh! IPTV",
+            // "cache: false" + "reuse: false" = a tela e sempre recriada do
+            // zero quando aparece. Sem o "reuse: false", o MSX reaproveita a
+            // tela atual (atalho de mesma URL) e nem busca o JSON no
+            // servidor: a secao "Ultimos assistidos" ficaria congelada.
+            Cache = false,
+            Reuse = false,
+            Flag = "home",
+            Ready = new MsxReady { Action = refreshUrl },
+            Pages = pages
+        };
+    }
 
     /// <summary>
     /// Card da tela inicial: icone grande no centro e o nome centralizado
     /// embaixo ("alignment: center" centraliza o titulo do item).
+    ///
+    /// "liveUrl" (opcional) pendura um "live" no card: o MSX chama o servico
+    /// quando o card recebe o foco. E a rede de seguranca do "ready" para
+    /// versoes do MSX que nao conhecem o objeto "ready".
     /// </summary>
-    private static MsxContentItem HomeCard(string icon, string title, string url, string action = "content") => new()
+    private static MsxContentItem HomeCard(
+        string icon, string title, string url, string action = "content", string layout = "0,1,4,4",
+        string? liveUrl = null) => new()
     {
         Type = "default",
         Icon = icon,
         IconSize = "large",
         Title = title,
         Alignment = "center",
-        Action = $"{action}:{url}"
+        Layout = layout,
+        Action = $"{action}:{url}",
+        Live = string.IsNullOrWhiteSpace(liveUrl)
+            ? null
+            : new MsxLiveObject { Type = "setup", Action = liveUrl }
     };
+
+    /// <summary>
+    /// Item da secao "Ultimos assistidos": filme e canal voltam a tocar e a
+    /// serie abre a pagina de detalhe (a "pagina da midia").
+    ///
+    /// O cartaz do filme leva "resume:key" e um live object do tipo
+    /// "playback": e o que faz o MSX mostrar a barra de "continuar de onde
+    /// parou" no cartaz.
+    /// </summary>
+    private MsxContentItem HistoryItem(
+        HttpContext context,
+        XtreamCredential credential,
+        string playbackBase,
+        WatchEntry entry,
+        int index)
+    {
+        var title = string.IsNullOrWhiteSpace(entry.Title) ? HistoryLabel(entry.Kind) : entry.Title!;
+
+        var item = new MsxContentItem
+        {
+            Id = $"hist_{entry.Kind}_{entry.Id}",
+            Type = "separate",
+            Layout = $"{index * 2},1,2,4",
+            Title = TitleWithYear(title, entry.Year),
+            Image = NormalizeImage(entry.Cover),
+            ImageFiller = entry.Kind == WatchKind.Live ? "fit" : "cover",
+            Color = "msx-glass",
+            Badge = string.IsNullOrWhiteSpace(entry.Rating) ? null : entry.Rating,
+            PlayerLabel = title
+        };
+
+        if (entry.Kind == WatchKind.Series)
+        {
+            // Atalho para a pagina da midia da serie (a vitrine com as
+            // temporadas e os episodios).
+            item.Action = $"content:{SeriesInfoUrl(context, credential, entry.Id, entry.CategoryId)}";
+            return item;
+        }
+
+        item.Properties = new Dictionary<string, string> { ["resume:key"] = "url" };
+
+        if (entry.Kind == WatchKind.Live)
+        {
+            item.Action = $"video:{credential.BuildFrom(playbackBase, "live", entry.Id, "m3u8")}";
+            return item;
+        }
+
+        var extension = string.IsNullOrWhiteSpace(entry.Extension) ? "mp4" : entry.Extension!;
+        item.Action = $"video:{credential.BuildFrom(playbackBase, "movie", entry.Id, extension)}";
+        item.Live = new MsxLiveObject { Type = "playback" };
+
+        return item;
+    }
+
+    /// <summary>Nome provisorio quando o item ainda nao tem metadados.</summary>
+    private static string HistoryLabel(string kind) => kind switch
+    {
+        WatchKind.Movie => "Filme",
+        WatchKind.Series => "Série",
+        WatchKind.Live => "Canal",
+        _ => "Assistido"
+    };
+
+    /// <summary>
+    /// Completa os metadados dos itens que foram gravados sem titulo (por
+    /// exemplo, assistidos com o provedor fora do ar).
+    ///
+    /// A busca para na primeira falha: quando o provedor esta fora, todas as
+    /// tentativas seguintes tambem vao falhar — e cada uma custaria uma
+    /// chamada ao provedor.
+    /// </summary>
+    private async Task EnrichAsync(XtreamCredential credential, IReadOnlyList<WatchEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.Title))
+            {
+                continue;
+            }
+
+            var metadata = await _xtream.ResolveWatchMetadataAsync(
+                credential, entry.Kind, entry.Id, entry.CategoryId);
+
+            if (metadata is null)
+            {
+                return;
+            }
+
+            entry.Title = metadata.Title;
+            entry.Cover ??= metadata.Cover;
+            entry.Year ??= metadata.Year;
+            entry.Rating ??= metadata.Rating;
+            entry.Extension ??= metadata.Extension;
+        }
+    }
+
+    /// <summary>
+    /// Acao de gravacao do historico: o MSX chama esse servico quando a
+    /// reproducao comeca ("trigger:start"), e o app registra o item na lista
+    /// de "ultimos assistidos".
+    ///
+    /// O "kind" diz o que foi tocado, o "id" e o stream_id (ou series_id) e o
+    /// "category_id" e a categoria de origem — com ela o app acha a capa e a
+    /// pagina da serie.
+    /// </summary>
+    private string WatchTrigger(HttpContext context, string kind, string id, string? categoryId)
+    {
+        var url = $"{BaseUrl(context)}/msx/history/record" +
+                  $"?kind={Uri.EscapeDataString(kind)}&id={Uri.EscapeDataString(id)}";
+
+        if (!string.IsNullOrWhiteSpace(categoryId))
+        {
+            url += $"&category_id={Uri.EscapeDataString(categoryId)}";
+        }
+
+        return $"execute:service:{url}";
+    }
 
     // ------------------------------------------------------------------
     // Tela 2 - Canais (lista no estilo "Channel List" do MSX)
@@ -234,7 +433,8 @@ public sealed class MsxContentFactory
                     Progress = -1,
                     Properties = new Dictionary<string, string>
                     {
-                        ["progress:type"] = "fix:Live"
+                        ["progress:type"] = "fix:Live",
+                        ["trigger:start"] = WatchTrigger(context, WatchKind.Live, channel.StreamId, activeId)
                     },
                     Live = new MsxLiveObject
                     {
@@ -459,6 +659,10 @@ public sealed class MsxContentFactory
                 Badge = string.IsNullOrWhiteSpace(movie.Rating) ? null : movie.Rating,
                 Action = $"video:{credential.BuildFrom(playbackBase, "movie", movie.StreamId, extension)}",
                 PlayerLabel = title,
+                Properties = new Dictionary<string, string>
+                {
+                    ["trigger:start"] = WatchTrigger(context, WatchKind.Movie, movie.StreamId, activeId)
+                },
                 Focus = offset == 0 && index == 0 ? true : null
             };
         }).ToList();
@@ -630,7 +834,11 @@ public sealed class MsxContentFactory
                 Title = entry.Title,
                 Stamp = CleanCategoryName(entry.CategoryName),
                 Action = $"video:{credential.BuildFrom(playbackBase, "live", entry.Id, "m3u8")}",
-                PlayerLabel = entry.Title
+                PlayerLabel = entry.Title,
+                Properties = new Dictionary<string, string>
+                {
+                    ["trigger:start"] = WatchTrigger(context, WatchKind.Live, entry.Id, entry.CategoryId)
+                }
             }).ToList();
         }
         else if (kind == "series")
@@ -660,7 +868,11 @@ public sealed class MsxContentFactory
                 Image = NormalizeImage(entry.Cover),
                 Badge = string.IsNullOrWhiteSpace(entry.Rating) ? null : entry.Rating,
                 Action = $"video:{credential.BuildFrom(playbackBase, "movie", entry.Id, SearchExtension(entry))}",
-                PlayerLabel = entry.Title
+                PlayerLabel = entry.Title,
+                Properties = new Dictionary<string, string>
+                {
+                    ["trigger:start"] = WatchTrigger(context, WatchKind.Movie, entry.Id, entry.CategoryId)
+                }
             }).ToList();
         }
 
@@ -887,7 +1099,7 @@ public sealed class MsxContentFactory
 
             foreach (var episode in episodes)
             {
-                var item = EpisodeItem(credential, playbackBase, season, episode);
+                var item = EpisodeItem(context, credential, playbackBase, seriesId, categoryId, season, episode);
 
                 firstEpisodeAction ??= item.Action;
 
@@ -1032,9 +1244,12 @@ public sealed class MsxContentFactory
     /// direita e duracao no canto. O "resume:key" faz o MSX lembrar de onde
     /// o usuario parou o episodio.
     /// </summary>
-    private static MsxContentItem EpisodeItem(
+    private MsxContentItem EpisodeItem(
+        HttpContext context,
         XtreamCredential credential,
         string playbackBase,
+        string seriesId,
+        string? categoryId,
         XtreamSeason season,
         XtreamEpisode episode)
     {
@@ -1057,7 +1272,13 @@ public sealed class MsxContentFactory
             Truncation = "text",
             Action = $"video:{credential.BuildFrom(playbackBase, "series", episode.Id, extension)}",
             PlayerLabel = name ?? code,
-            Properties = new Dictionary<string, string> { ["resume:key"] = "url" }
+            Properties = new Dictionary<string, string>
+            {
+                ["resume:key"] = "url",
+                // Ao tocar o episodio, a SERIE entra no historico de "ultimos
+                // assistidos" (a faixa leva o atalho para a pagina da serie).
+                ["trigger:start"] = WatchTrigger(context, WatchKind.Series, seriesId, categoryId)
+            }
         };
     }
 
@@ -1198,11 +1419,11 @@ public sealed class MsxContentFactory
     {
         var live = await BuildLiveChannelListAsync(context, credential, take: 8);
 
-        var home = BuildHome(context, credential);
+        var home = await BuildHomeAsync(context, credential);
 
-        if (home.Items is { Count: 3 })
+        if (home.Pages is { Count: > 0 } && home.Pages[0].Items is { Count: > 0 })
         {
-            home.Items[0].Action = $"content:json:{ToBase64(live)}";
+            home.Pages[0].Items[0].Action = $"content:json:{ToBase64(live)}";
         }
 
         return new MsxMenu
@@ -1236,6 +1457,12 @@ public sealed class MsxContentFactory
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Base publica do proprio app (usada pelo Start Object e pelo
+    /// "reference" da tela doInicio).
+    /// </summary>
+    public string PublicBaseUrl(HttpContext context) => BaseUrl(context);
 
     /// <summary>
     /// Base publica do proprio app.

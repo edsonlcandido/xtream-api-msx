@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ehiptv_msx.Models;
+namespace xtream_api_msx.Models;
 
 /// <summary>
 /// Start Object do MSX (endpoint "/msx/start.json").
@@ -76,6 +76,51 @@ public sealed class MsxContent
     /// </summary>
     [JsonPropertyName("compress")]
     public bool? Compress { get; set; }
+
+    /// <summary>
+    /// "false" desliga o cache do MSX para esta tela: o conteudo e baixado de
+    /// novo sempre que a tela volta a aparecer. E o que mantem a secao
+    /// "Ultimos assistidos" doInicio atualizada sem reiniciar o app.
+    /// </summary>
+    [JsonPropertyName("cache")]
+    public bool? Cache { get; set; }
+
+    /// <summary>
+    /// "false" recria a tela (DOM) toda vez que ela e exibida.
+    ///
+    /// O "cache: false" sozinho NAO basta: ao carregar uma URL, o MSX faz
+    /// tres checagens — (1) atalho de mesma URL, (2) cache do backend,
+    /// (3) reuso do DOM. O "cache" so controla a (2); o atalho (1), que
+    /// reaproveita a tela atual sem NENHUMA requisicao ao servidor, e
+    /// desligado pelo "reuse". Para a secao "Ultimos assistidos" aparecer
+    /// depois de assistir algo, os dois precisam ser "false".
+    /// </summary>
+    [JsonPropertyName("reuse")]
+    public bool? Reuse { get; set; }
+
+    /// <summary>
+    /// Identificador da tela ("home"). Permite ao MSX recarregar essa tela
+    /// em tempo de execucao (replace:content:home).
+    /// </summary>
+    [JsonPropertyName("flag")]
+    public string? Flag { get; set; }
+
+    /// <summary>
+    /// Acao executada toda vez que a tela fica pronta — inclusive quando ela
+    /// volta do player sem ser recarregada. E o que permite ao app avisar
+    /// "o historico mudou, recria a tela".
+    /// </summary>
+    [JsonPropertyName("ready")]
+    public MsxReady? Ready { get; set; }
+
+    /// <summary>
+    /// URL de onde o MSX busca o conteudo real da tela. Usado so na tela do
+    ///Inicio: e o que permite recarrega-la ("reload:content") mesmo tendo
+    /// sido carregada no startup — sem isso o MSX mantem a tela montada e a
+    /// faixa de "ultimos assistidos" nunca aparece.
+    /// </summary>
+    [JsonPropertyName("reference")]
+    public string? Reference { get; set; }
 
     [JsonPropertyName("headline")]
     public string? Headline { get; set; }
@@ -410,6 +455,21 @@ public sealed class MsxLiveState
     /// <summary>Acao executada pelo MSX neste estado.</summary>
     [JsonPropertyName("action")]
     public string? Action { get; set; }
+}
+
+/// <summary>
+/// Objeto "ready" do Content Root Object: a acao executada quando a tela
+/// fica pronta.
+/// </summary>
+public sealed class MsxReady
+{
+    /// <summary>Acao executada (ex.: "execute:service:http://...").</summary>
+    [JsonPropertyName("action")]
+    public string? Action { get; set; }
+
+    /// <summary>Dados da acao (opcional).</summary>
+    [JsonPropertyName("data")]
+    public object? Data { get; set; }
 }
 
 /// <summary>

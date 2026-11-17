@@ -1,7 +1,7 @@
 using System.Text;
-using ehiptv_msx.Models;
+using xtream_api_msx.Models;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>
 /// Servico de live data do MSX (Experts API).

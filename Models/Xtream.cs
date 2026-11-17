@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace ehiptv_msx.Models;
+namespace xtream_api_msx.Models;
 
 /// <summary>Categoria do Xtream Codes (live, vod ou series).</summary>
 public sealed class XtreamCategory
