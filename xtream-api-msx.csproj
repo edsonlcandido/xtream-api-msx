@@ -7,4 +7,12 @@
     <RootNamespace>xtream_api_msx</RootNamespace>
   </PropertyGroup>
 
+  <!-- O projeto de testes fica em "tests/" e nao faz parte do app. -->
+  <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+    <Content Remove="tests/**" />
+    <None Remove="tests/**" />
+    <EmbeddedResource Remove="tests/**" />
+  </ItemGroup>
+
 </Project>
