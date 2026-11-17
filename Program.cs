@@ -1,8 +1,8 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using ehiptv_msx.Models;
-using ehiptv_msx.Services;
+using xtream_api_msx.Models;
+using xtream_api_msx.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,7 +18,7 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient("xtream", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(90);
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; ehiptv-msx/1.0)");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; xtream-api-msx/1.0)");
 });
 
 builder.Services.Configure<XtreamOptions>(builder.Configuration.GetSection("Xtream"));
@@ -26,7 +26,7 @@ builder.Services.Configure<XtreamOptions>(builder.Configuration.GetSection("Xtre
 // As bases do provedor e as credenciais ficam FORA do repositorio:
 //   - variaveis de ambiente (Docker/Easypanel): BASE_URL, FALLBACK_URL,
 //     PROXY_URL (e o padrao Xtream__Username / Xtream__Password);
-//   - arquivo local de secrets: %USERPROFILE%\.minimax\secrets\ehiptv-msx.json
+//   - arquivo local de secrets: %USERPROFILE%\.minimax\secrets\xtream-api-msx.json
 builder.Services.PostConfigure<XtreamOptions>(options =>
 {
     var envBase = Environment.GetEnvironmentVariable("BASE_URL");

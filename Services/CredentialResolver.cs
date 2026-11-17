@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>Opcoes de configuracao do app (appsettings.json).</summary>
 public sealed class XtreamOptions
@@ -28,7 +28,7 @@ public sealed class XtreamOptions
     public string? ApiProxyUrl { get; set; }
 
     /// <summary>
-    /// URL publica do proprio app (ex.: https://ehiptv.ehtudo.app). Necesario
+    /// URL publica do proprio app (ex.: https://msx.seu-dominio.example). Necesario
     /// em producao porque o proxy pode nao repassar o Host original.
     /// Vazio = usa scheme+host da requisicao (dev local).
     /// </summary>
@@ -291,12 +291,12 @@ public sealed record XtreamSecrets(string BaseUrl, string Username, string Passw
 
 /// <summary>
 /// Le o arquivo local de secrets (fora do repositorio) com as credenciais e as
-/// bases do provedor. Caminho: variavel de ambiente EHIPTV_MSX_SECRETS_FILE ou,
-/// no Windows, %USERPROFILE%\.minimax\secrets\ehiptv-msx.json
+/// bases do provedor. Caminho: variavel de ambiente xtream_api_msx_SECRETS_FILE ou,
+/// no Windows, %USERPROFILE%\.minimax\secrets\xtream-api-msx.json
 /// </summary>
 public static class SecretsLoader
 {
-    public const string EnvVar = "EHIPTV_MSX_SECRETS_FILE";
+    public const string EnvVar = "xtream_api_msx_SECRETS_FILE";
 
     public static XtreamSecrets? TryLoad()
     {
@@ -305,7 +305,7 @@ public static class SecretsLoader
         if (string.IsNullOrWhiteSpace(path))
         {
             var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            path = Path.Combine(profile, ".minimax", "secrets", "ehiptv-msx.json");
+            path = Path.Combine(profile, ".minimax", "secrets", "xtream-api-msx.json");
         }
 
         if (!File.Exists(path))

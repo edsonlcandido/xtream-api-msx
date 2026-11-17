@@ -2,11 +2,11 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ehiptv_msx.Models;
+using xtream_api_msx.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>
 /// Cliente do Xtream Codes (player_api.php). Fala direto com o provedor,

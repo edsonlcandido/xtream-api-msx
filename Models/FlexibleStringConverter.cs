@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ehiptv_msx.Models;
+namespace xtream_api_msx.Models;
 
 /// <summary>
 /// O Xtream Codes alterna entre string e number nos mesmos campos

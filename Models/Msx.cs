@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ehiptv_msx.Models;
+namespace xtream_api_msx.Models;
 
 /// <summary>
 /// Start Object do MSX (endpoint "/msx/start.json").

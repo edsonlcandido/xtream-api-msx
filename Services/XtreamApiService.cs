@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using ehiptv_msx.Models;
+using xtream_api_msx.Models;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>
 /// Endpoint "/player_api.php" no padrao IPTV Xtream Codes.

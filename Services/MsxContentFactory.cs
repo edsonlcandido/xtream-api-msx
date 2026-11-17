@@ -1,7 +1,7 @@
-using ehiptv_msx.Models;
+using xtream_api_msx.Models;
 using Microsoft.Extensions.Options;
 
-namespace ehiptv_msx.Services;
+namespace xtream_api_msx.Services;
 
 /// <summary>
 /// Monta as telas do app MSX (4 telas + paginas de detalhe) a partir do
